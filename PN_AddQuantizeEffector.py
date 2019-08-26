@@ -46,7 +46,7 @@ def main():
 
     nameVec = ["Position step", "Scale step", "Angle step"]
     unitVec = [c4d.DESC_UNIT_METER, c4d.DESC_UNIT_REAL, c4d.DESC_UNIT_DEGREE]
-    stepVec = [c4d.Vector(1), c4d.Vector(0.1), c4d.Vector(1)]
+    stepVec = [c4d.Vector(1), c4d.Vector(0.1), c4d.Vector(pi/180)]
     minVec  = [c4d.Vector(0.1), c4d.Vector(0.1), c4d.Vector(pi/180)]
     defVec  = [c4d.Vector(20), c4d.Vector(0.5), c4d.Vector(pi/2)]
     nameBool = "On"
