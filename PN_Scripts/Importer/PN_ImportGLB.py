@@ -1,3 +1,13 @@
+"""
+PN_ImportGLB
+
+Author: pon
+Description: Import separated glTF, glb or vrm(limited support) file into C4D
+Requirements: This script was tested with the following Requirements
+ - C4D R26 (Python 3.9.1)
+ - Sketchfab Cinema4D Plugin (https://github.com/sketchfab/c4d-plugin)
+"""
+
 from distutils import extension
 import os
 import json
