@@ -45,12 +45,15 @@ def get_gltf_importer(path: str, loglevel=logging.ERROR) -> glTFImporter:
     return gltf_importer
 
 def is_vrm_format(gltf_importer: glTFImporter) -> bool:
-    gltf = gltf_importer.data
-    extensions_used = gltf.extensions_used
-    for extension in extensions_used:
-        if extension == "VRM":
-            return True
-    return False
+    try:
+        gltf = gltf_importer.data
+        extensions_used = gltf.extensions_used
+        for extension in extensions_used:
+            if extension == "VRM":
+                return True
+        return False
+    except:
+        return False
 
 def convert_glb_2_gltf(gltf_importer: glTFImporter) -> str:
     def generate_gltf_export_settings(gltf_importer) -> dict:
@@ -70,7 +73,7 @@ def convert_glb_2_gltf(gltf_importer: glTFImporter) -> str:
         glb_textures = glb.textures
         if glb_textures is None:
             print("No textures found")
-            return None  # type: ignore
+            return glb
         tex_dir = os.path.join(export_settings["gltf_filedirectory"], export_settings["gltf_texturedirectoryname"])
         try:
             os.makedirs(tex_dir, exist_ok=True)
@@ -79,7 +82,7 @@ def convert_glb_2_gltf(gltf_importer: glTFImporter) -> str:
         for texture in glb_textures:
             img_idx = texture.source
             image = glb.images[img_idx] # gltfio.com.gltf2_io.Image instance
-            image_extension = "jpg" if (image.mime_type == "image/jpeg") else "png"      
+            image_extension = "jpg" if (image.mime_type == "image/jpeg") else "png"
             image_filename = image.name + '.' + image_extension
             image_full_path = os.path.join(tex_dir, image_filename)
             image_bin, image_name = BinaryData.get_image_data(gltf_importer, img_idx)
@@ -113,8 +116,8 @@ def convert_glb_2_gltf(gltf_importer: glTFImporter) -> str:
         commercial_Usage = vrm_extensions["VRM"]["meta"]["commercialUssageName"]
 
         license_str = (
-            "Model Information:\n" + 
-            "* title:	" + title + "\n" +
+            "Model Information:\n" +
+            "* title:   " + title + "\n" +
             "* author:  " + author + " (" + contact_info + ")\n\n" +
             "Model License:\n" +
             "* license type: " + license_name + "\n\n" +
