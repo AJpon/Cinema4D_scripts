@@ -219,7 +219,9 @@
 """
 
 from distutils import extension
+from genericpath import exists
 import os
+import math
 import json
 import logging
 from typing import overload
@@ -363,15 +365,89 @@ class ImportGLTF(import_gltf.ImportGLTF):
     #############################
 
     def convert_mesh(self, gltf, mesh_index, materials: dict[c4d.Material, c4d.Material]):
-        gltf_mesh = gltf.data.meshes[mesh_index]
+        def connect_and_delete(obj: c4d.BaseObject):
+            doc = c4d.documents.GetActiveDocument()
+            doc.InsertObject(obj)   # Add the object to the active document
+            doc.SetChanged()        # Apply changes to the active document
+            obj.SetAllBits(c4d.BIT_ACTIVE)
+            c4d.CallCommand(16768, 16768)  # Connect Objects + Delete
+            obj = doc.GetActiveObject()  # type: ignore
+            obj.Remove()
+            doc.SetChanged()
+            return obj
 
+        # Normals tag. (Contains 12 WORDs per polygon, enumerated like the following: ax,ay,az,bx,by,bz,cx,cy,cz,dx,dy,dz.
+        # The value is the Real value of the normal vector component multiplied by 32000.0.)
+        def set_normals(normal_tag, polygon, normal_a, normal_b, normal_c, normal_d):
+            def float2bytes(f):
+                int_value = int(math.fabs(f * 32000.0))
+                high_byte = int(int_value / 256)
+                low_byte = int_value - 256 * high_byte
+                if f < 0:
+                    high_byte = 255 - high_byte
+                    low_byte = 255 - low_byte
+                return (low_byte, high_byte)
+
+            normal_list = [normal_a, normal_b, normal_c, normal_d]
+            normal_buffer = normal_tag.GetLowlevelDataAddressW()
+            vector_size = 6
+            component_size = 2
+            for v in range(4):
+                normal = normal_list[v]
+                component = [normal.x, normal.y, normal.z]
+                for c in range(3):
+                    low_byte, high_byte = float2bytes(component[c])
+                    idx = normal_tag.GetDataSize() * polygon + v * vector_size + c * component_size + 0
+                    normal_buffer[idx + 0] = low_byte
+                    normal_buffer[idx + 1] = high_byte
+
+        def parse_normals(gltf, normal_accessor: dict, c4d_mesh: c4d.PolygonObject):
+            normal = []
+            if 'NORMAL' in normal_accessor:
+                normal = BinaryData.get_data_from_accessor(gltf, normal_accessor['NORMAL'])
+            if normal:
+                nb_poly = c4d_mesh.GetPolygonCount()
+                normaltag = c4d.NormalTag(nb_poly)
+                for polyidx in range(nb_poly):
+                    poly = c4d_mesh.GetPolygon(polyidx)
+                    normal_a = self.switch_handedness_v3(self.list_to_vec3(normal[poly.a]))
+                    normal_b = self.switch_handedness_v3(self.list_to_vec3(normal[poly.b]))
+                    normal_c = self.switch_handedness_v3(self.list_to_vec3(normal[poly.c]))
+                    normal_d = c4d.Vector(0.0, 0.0, 0.0)
+                    set_normals(normaltag, polyidx, normal_a, normal_b, normal_c, normal_d)
+                c4d_mesh.InsertTag(normaltag)
+                # A Phong tag is needed to make C4D use the Normal Tag (seems to be done for Collada)
+                phong = c4d.BaseTag(5612)
+                c4d_mesh.InsertTag(phong)
+
+        def parse_tangents(gltf, tangent_accessor: dict, c4d_mesh: c4d.PolygonObject):
+            tangent = []
+            if 'TANGENT' in tangent_accessor:
+                tangent = BinaryData.get_data_from_accessor(gltf, tangent_accessor['TANGENT'])
+                if tangent:
+                    nb_poly = c4d_mesh.GetPolygonCount()
+                    tangentTag = c4d.TangentTag(nb_poly)
+                    for polyidx in range(0, nb_poly):
+                        poly = c4d_mesh.GetPolygon(polyidx)
+                        normal_a = self.switch_handedness_v3(self.list_to_vec3(tangent[poly.a]))
+                        normal_b = self.switch_handedness_v3(self.list_to_vec3(tangent[poly.b]))
+                        normal_c = self.switch_handedness_v3(self.list_to_vec3(tangent[poly.c]))
+                        normal_d = c4d.Vector(0.0, 0.0, 0.0)
+                        set_normals(tangentTag, polyidx, normal_a, normal_b, normal_c, normal_d)
+                    c4d_mesh.InsertTag(tangentTag)
+
+        gltf_mesh = gltf.data.meshes[mesh_index]
         if len(gltf_mesh.primitives) == 1:
             # If the selection tag is unnecessary
             return self.convert_primitive(gltf_mesh.primitives[0], gltf, materials)
         else: 
             # If a selection tag is required
             c4d_object: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
+            c4d_target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
+            morph_targets: list[c4d.BaseObject] = []
+            has_blendshape = False
             for prim in gltf_mesh.primitives:
+                # Mesh processing
                 c4d_mesh: c4d.PolygonObject = self.convert_primitive(prim, gltf, materials)
                 # Add the mesh to the selection tag
                 poly_selection_tag = c4d.SelectionTag(c4d.Tpolygonselection)
@@ -386,14 +462,64 @@ class ImportGLTF(import_gltf.ImportGLTF):
                     mattag.SetParameter(c4d.TEXTURETAG_RESTRICTION, poly_selection_tag.GetName(), c4d.DESCFLAGS_SET_NONE)  # type: ignore
                 # Add the mesh to the object
                 c4d_mesh.InsertUnder(c4d_object)
+
+                # Morph target processing
+                if prim.targets:
+                    has_blendshape = True
+                    for i in range(len(prim.targets)):
+                        # create hierarchy
+                        if not morph_targets:
+                            if prim.extras["targetNames"]:
+                                for target_name in prim.extras["targetNames"]:
+                                    target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
+                                    target.SetName(target_name)
+                                    morph_targets.append(target)
+                            else:
+                                for i in range(len(prim.targets)):
+                                    target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
+                                    target.SetName("target_" + str(i).format('zero padding: {:0=3}'))
+                                    morph_targets.append(target)
+    
+                        # generate target mesh
+                        target_idx = prim.targets[i]
+                        target_mesh: c4d.PolygonObject
+                        vertex = BinaryData.get_data_from_accessor(gltf, target_idx['POSITION'])  # type: ignore
+                        nb_vertices = len(vertex)
+                        # Vertices are stored under the form # [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0) ...]
+                        verts = []
+                        for j in range(len(vertex)):
+                            vect = c4d.Vector(vertex[j][0], vertex[j][1], vertex[j][2])
+                            verts.append(self.switch_handedness_v3(vect))
+                        indices = BinaryData.get_data_from_accessor(gltf, prim.indices)
+                        nb_poly = int(len(indices) / 3)
+                        target_mesh = c4d.PolygonObject(nb_vertices, nb_poly)
+                        target_mesh.SetAllPoints(verts)
+                        # Indices are stored like [(0,), (1,), (2,)]
+                        current_poly = 0
+                        try:
+                            for j in range(0, len(indices), 3):
+                                poly = c4d.CPolygon(indices[j + 2][0], indices[j + 1][0], indices[j][0])  # indice list is like [(0,), (1,), (2,)]
+                                target_mesh.SetPolygon(current_poly, poly)
+                                current_poly += 1
+                        except:
+                            self.has_problematic_polygons = True
+                            return None # Avoid crash from Sketchup because of wrong geometry
+                        parse_normals(gltf, target_idx, target_mesh)  # type: ignore
+                        # TANGENTS (Commented for now, "Tag not in sync" error popup in c4d)
+                        # parse_tangents(gltf, target, target_mesh)
+                        target_mesh.SetDirty(c4d.DIRTYFLAGS_ALL)
+                        target_mesh.InsertUnder(morph_targets[i])
+            if has_blendshape:
+                c4d_target.SetName("Poses: " + gltf.data.meshes[mesh_index].name if gltf.data.meshes[mesh_index].name is not None else "Mesh")
+                for i in range(len(morph_targets)):
+                    target = morph_targets[i]
+                    target = connect_and_delete(target)
+                    target.InsertUnderLast(c4d_target)
+
             # Connect all the meshes to the object
-            doc = c4d.documents.GetActiveDocument()
-            doc.InsertObject(c4d_object)  # Add the object to the active document
-            doc.SetChanged()              # Apply changes to the active document
-            c4d_object.SetAllBits(c4d.BIT_ACTIVE)
-            c4d.CallCommand(16768, 16768)  # Connect Objects + Delete
-            c4d_object = doc.GetActiveObject()  # type: ignore
-            c4d_object.Remove()
+            c4d_object = connect_and_delete(c4d_object)
+            if has_blendshape:
+                c4d_target.InsertUnder(c4d_object)
             return c4d_object
 
     #############################
