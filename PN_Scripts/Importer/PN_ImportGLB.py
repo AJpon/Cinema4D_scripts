@@ -224,6 +224,7 @@ import os
 import math
 import json
 import logging
+from pydoc import doc
 from typing import overload
 
 # C4D modules
@@ -275,6 +276,7 @@ class ImportGLTF(import_gltf.ImportGLTF):
         super().__init__(progress_callback if progress_callback else self.__dummy_progress_callback)
 
     def run(self, filepath: str, uid=None):
+        doc = c4d.documents.GetActiveDocument()
         print("\nImporting %s\n" % filepath)
 
         gltf = glTFImporter(filepath)
@@ -483,17 +485,19 @@ class ImportGLTF(import_gltf.ImportGLTF):
                         # generate target mesh
                         target_idx = prim.targets[i]
                         target_mesh: c4d.PolygonObject
-                        vertex = BinaryData.get_data_from_accessor(gltf, target_idx['POSITION'])  # type: ignore
-                        nb_vertices = len(vertex)
+                        # Get the difference value from the original vertex
+                        vertex_offset = BinaryData.get_data_from_accessor(gltf, target_idx['POSITION'])  # type: ignore
+                        nb_vertices = len(vertex_offset)
                         # Vertices are stored under the form # [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0) ...]
-                        verts = []
-                        for j in range(len(vertex)):
-                            vect = c4d.Vector(vertex[j][0], vertex[j][1], vertex[j][2])
-                            verts.append(self.switch_handedness_v3(vect))
+                        c4d_mesh_vects = c4d_mesh.GetAllPoints()
+                        target_verts = []
+                        for j in range(len(vertex_offset)):
+                            vect_offset = c4d.Vector(vertex_offset[j][0], vertex_offset[j][1], vertex_offset[j][2])
+                            target_verts.append(c4d_mesh_vects[j] + self.switch_handedness_v3(vect_offset))
                         indices = BinaryData.get_data_from_accessor(gltf, prim.indices)
-                        nb_poly = int(len(indices) / 3)
+                        nb_poly = c4d_mesh.GetPolygonCount()
                         target_mesh = c4d.PolygonObject(nb_vertices, nb_poly)
-                        target_mesh.SetAllPoints(verts)
+                        target_mesh.SetAllPoints(target_verts)
                         # Indices are stored like [(0,), (1,), (2,)]
                         current_poly = 0
                         try:
@@ -514,6 +518,8 @@ class ImportGLTF(import_gltf.ImportGLTF):
                 for i in range(len(morph_targets)):
                     target = morph_targets[i]
                     target = connect_and_delete(target)
+                    target.SetEditorMode(c4d.MODE_OFF)
+                    target.SetRenderMode(c4d.MODE_OFF)
                     target.InsertUnderLast(c4d_target)
 
             # Connect all the meshes to the object
