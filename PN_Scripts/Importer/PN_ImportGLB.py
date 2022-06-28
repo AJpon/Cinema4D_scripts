@@ -218,8 +218,6 @@
 ```
 """
 
-from distutils import extension
-from genericpath import exists
 import os
 import math
 import json
@@ -230,10 +228,11 @@ from typing import overload
 # C4D modules
 import c4d
 from c4d import gui, storage
-from c4d.modules.character import CAWeightTag
+from c4d.modules.character import CAWeightTag, CAPoseMorphTag
 
 # glTF-IO modules
 from gltfio.com.gltf2_io import Gltf
+from gltfio.com.gltf2_io import *
 from gltfio.imp.gltf2_io_gltf import glTFImporter
 from gltfio.imp.gltf2_io_binary import BinaryData
 from gltfio.exp.gltf2_io_export import *
@@ -366,7 +365,7 @@ class ImportGLTF(import_gltf.ImportGLTF):
     # GLTF PARSING / C4D OBJECTS
     #############################
 
-    def convert_mesh(self, gltf, mesh_index, materials: dict[c4d.Material, c4d.Material]):
+    def convert_mesh(self, gltf: glTFImporter, mesh_index, materials: dict[c4d.Material, c4d.Material]):
         def connect_and_delete(obj: c4d.BaseObject):
             doc = c4d.documents.GetActiveDocument()
             doc.InsertObject(obj)   # Add the object to the active document
@@ -438,17 +437,143 @@ class ImportGLTF(import_gltf.ImportGLTF):
                         set_normals(tangentTag, polyidx, normal_a, normal_b, normal_c, normal_d)
                     c4d_mesh.InsertTag(tangentTag)
 
-        gltf_mesh = gltf.data.meshes[mesh_index]
-        if len(gltf_mesh.primitives) == 1:
+        def convert_targets(morph_targets: list[c4d.BaseObject], prim: MeshPrimitive, base_mesh: c4d.PolygonObject) -> list[c4d.BaseObject]:
+            # create hierarchy
+            if prim.extras["targetNames"]:
+                for target_name in prim.extras["targetNames"]:
+                    target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
+                    target.SetName(target_name)
+                    morph_targets.append(target)
+            else:
+                for i in range(len(prim.targets)):
+                    target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
+                    target.SetName("target_" + str(i).format('zero padding: {:0=3}'))
+                    morph_targets.append(target)
+            for i in range(len(prim.targets)):
+                # generate target mesh
+                target_idx = prim.targets[i]
+                target_mesh: c4d.PolygonObject
+                # Get the difference value from the original vertex
+                vertex_offset = BinaryData.get_data_from_accessor(gltf, target_idx['POSITION'])  # type: ignore
+                nb_vertices = len(vertex_offset)
+                # Vertices are stored under the form # [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0) ...]
+                c4d_mesh_vects = base_mesh.GetAllPoints()
+                target_verts = []
+                for j in range(len(vertex_offset)):
+                    vect_offset = c4d.Vector(vertex_offset[j][0], vertex_offset[j][1], vertex_offset[j][2])
+                    target_verts.append(c4d_mesh_vects[j] + self.switch_handedness_v3(vect_offset))
+                indices = BinaryData.get_data_from_accessor(gltf, prim.indices)
+                nb_poly = base_mesh.GetPolygonCount()
+                target_mesh = c4d.PolygonObject(nb_vertices, nb_poly)
+                target_mesh.SetAllPoints(target_verts)
+                # Indices are stored like [(0,), (1,), (2,)]
+                current_poly = 0
+                try:
+                    for j in range(0, len(indices), 3):
+                        poly = c4d.CPolygon(indices[j + 2][0], indices[j + 1][0], indices[j][0])  # indice list is like [(0,), (1,), (2,)]
+                        target_mesh.SetPolygon(current_poly, poly)
+                        current_poly += 1
+                except:
+                    # Avoid crash from Sketchup because of wrong geometry
+                    self.has_problematic_polygons = True
+                    return None # type: ignore
+                parse_normals(gltf, target_idx, target_mesh)  # type: ignore
+                # TANGENTS (Commented for now, "Tag not in sync" error popup in c4d)
+                # parse_tangents(gltf, target, target_mesh)
+                target_mesh.SetDirty(c4d.DIRTYFLAGS_ALL)
+                target_mesh.InsertUnder(morph_targets[i])
+            return morph_targets
+
+        def create_morphtag(base_mesh: c4d.PolygonObject, targets: list[c4d.PolygonObject]):
+            doc = c4d.documents.GetActiveDocument()
+            doc.InsertObject(base_mesh)   # Add the object to the active document
+            doc.SetChanged()        # Apply changes to the active document
+            # Insert new morph tag
+            mtag = CAPoseMorphTag()
+            base_mesh.InsertTag(mtag)
+            doc.SetChanged()
+            # Init morph tag
+            mtag.InitMorphs()
+            mtag.SetParameter(c4d.ID_CA_POSE_POINTS, True, c4d.DESCFLAGS_SET_NONE)  # type: ignore
+            mtag.ExitEdit(doc, True)
+            # Add default morph
+            defaule_morph = mtag.AddMorph()
+            defaule_morph_name = "Default: " + base_mesh.GetName()
+            defaule_morph.SetName(defaule_morph_name)
+            defaule_morph.Store(doc, mtag, c4d.CAMORPH_DATA_FLAGS_POINTS)
+            defaule_morph.SetMode(doc, mtag, c4d.CAMORPH_MODE_FLAGS_EXPAND, c4d.CAMORPH_MODE_REL)
+            mtag.UpdateMorphs()
+            c4d.EventAdd() 
+
+            # Embed the morph vertex data inside (Failure)
+
+            # # Add morphs
+            # for target in targets:
+            #     morph_name = target.GetName()
+            #     point_cnt = target.GetPointCount()
+            #     morph = mtag.AddMorph()
+            #     morph.SetName(morph_name)
+            #     morph.SetMode(doc, mtag, c4d.CAMORPH_MODE_FLAGS_ALL, c4d.CAMORPH_MODE_REL)
+            #     morph.Store(doc, mtag, c4d.CAMORPH_DATA_FLAGS_POINTS)
+            #     m_node = morph.GetFirst()
+            #     # Add points to morph node
+            #     m_node.SetPointCount(point_cnt)
+            #     for i in range(point_cnt):
+            #         m_node.SetPoint(i, target.GetPoint(i))
+            #         mtag.UpdateMorphs()
+           
+            # Add morphs
+            doc.SetActiveTag(mtag)
+            for target in targets:
+                morph_name = target.GetName()
+                morph = mtag.AddMorph()
+                morph.SetName(morph_name)
+                mtag.UpdateMorphs()
+                m_idx = mtag.GetMorphIndex(morph)
+                mtag.SetActiveMorphIndex(m_idx)
+                # mtag.SetParameter(c4d.ID_CA_POSE_STRENGTH, 0, c4d.DESCFLAGS_SET_NONE)  # type: ignore # Not working
+                mtag.SetParameter(c4d.ID_CA_POSE_TARGET, target, c4d.DESCFLAGS_SET_NONE)  # type: ignore
+                morph.Store(doc, mtag, c4d.CAMORPH_DATA_FLAGS_POINTS)
+                morph.Apply(doc, mtag, c4d.CAMORPH_DATA_FLAGS_POINTS)
+                mtag.UpdateMorphs()
+            mtag.SetParameter(c4d.ID_CA_POSE_MODE, c4d.ID_CA_POSE_MODE_ANIMATE, c4d.DESCFLAGS_SET_NONE)  # type: ignore
+            # Reset morph intensity to 0
+            c4d.CallButton(mtag, c4d.ID_CA_POSE_RESET_SLIDER)
+            mtag.UpdateMorphs()
+            base_mesh.Remove()
+            doc.SetChanged()
+            c4d.EventAdd()
+
+
+        gltf_mesh: Mesh = gltf.data.meshes[mesh_index]
+        mesh_name = gltf.data.meshes[mesh_index].name if gltf.data.meshes[mesh_index].name is not None else "Mesh"
+        prims: list[MeshPrimitive] = gltf_mesh.primitives
+        has_blendshape = False
+        c4d_target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
+        morph_targets: list[c4d.BaseObject] = []
+        if len(prims) == 1:
             # If the selection tag is unnecessary
-            return self.convert_primitive(gltf_mesh.primitives[0], gltf, materials)
+            # Mesh processing
+            c4d_mesh: c4d.PolygonObject = self.convert_primitive(prims[0], gltf, materials)
+            # Morph target processing
+            prim = prims[0]
+            if prim.targets:
+                has_blendshape = True
+                morph_targets = convert_targets(morph_targets, prim, c4d_mesh)
+            if has_blendshape:
+                c4d_target.SetName("Poses: " + gltf.data.meshes[mesh_index].name if gltf.data.meshes[mesh_index].name is not None else "Mesh")
+                for i in range(len(morph_targets)):
+                    target = morph_targets[i]
+                    target.SetEditorMode(c4d.MODE_OFF)
+                    target.SetRenderMode(c4d.MODE_OFF)
+                    target.InsertUnderLast(c4d_target)
+                c4d_target.InsertUnder(c4d_mesh)
+                create_morphtag(c4d_mesh, c4d_target.GetChildren())  # type: ignore
+            return c4d_mesh
         else: 
             # If a selection tag is required
             c4d_object: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
-            c4d_target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
-            morph_targets: list[c4d.BaseObject] = []
-            has_blendshape = False
-            for prim in gltf_mesh.primitives:
+            for prim in prims:
                 # Mesh processing
                 c4d_mesh: c4d.PolygonObject = self.convert_primitive(prim, gltf, materials)
                 # Add the mesh to the selection tag
@@ -468,53 +593,10 @@ class ImportGLTF(import_gltf.ImportGLTF):
                 # Morph target processing
                 if prim.targets:
                     has_blendshape = True
-                    for i in range(len(prim.targets)):
-                        # create hierarchy
-                        if not morph_targets:
-                            if prim.extras["targetNames"]:
-                                for target_name in prim.extras["targetNames"]:
-                                    target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
-                                    target.SetName(target_name)
-                                    morph_targets.append(target)
-                            else:
-                                for i in range(len(prim.targets)):
-                                    target: c4d.BaseObject = c4d.BaseObject(c4d.Onull)
-                                    target.SetName("target_" + str(i).format('zero padding: {:0=3}'))
-                                    morph_targets.append(target)
-    
-                        # generate target mesh
-                        target_idx = prim.targets[i]
-                        target_mesh: c4d.PolygonObject
-                        # Get the difference value from the original vertex
-                        vertex_offset = BinaryData.get_data_from_accessor(gltf, target_idx['POSITION'])  # type: ignore
-                        nb_vertices = len(vertex_offset)
-                        # Vertices are stored under the form # [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0) ...]
-                        c4d_mesh_vects = c4d_mesh.GetAllPoints()
-                        target_verts = []
-                        for j in range(len(vertex_offset)):
-                            vect_offset = c4d.Vector(vertex_offset[j][0], vertex_offset[j][1], vertex_offset[j][2])
-                            target_verts.append(c4d_mesh_vects[j] + self.switch_handedness_v3(vect_offset))
-                        indices = BinaryData.get_data_from_accessor(gltf, prim.indices)
-                        nb_poly = c4d_mesh.GetPolygonCount()
-                        target_mesh = c4d.PolygonObject(nb_vertices, nb_poly)
-                        target_mesh.SetAllPoints(target_verts)
-                        # Indices are stored like [(0,), (1,), (2,)]
-                        current_poly = 0
-                        try:
-                            for j in range(0, len(indices), 3):
-                                poly = c4d.CPolygon(indices[j + 2][0], indices[j + 1][0], indices[j][0])  # indice list is like [(0,), (1,), (2,)]
-                                target_mesh.SetPolygon(current_poly, poly)
-                                current_poly += 1
-                        except:
-                            self.has_problematic_polygons = True
-                            return None # Avoid crash from Sketchup because of wrong geometry
-                        parse_normals(gltf, target_idx, target_mesh)  # type: ignore
-                        # TANGENTS (Commented for now, "Tag not in sync" error popup in c4d)
-                        # parse_tangents(gltf, target, target_mesh)
-                        target_mesh.SetDirty(c4d.DIRTYFLAGS_ALL)
-                        target_mesh.InsertUnder(morph_targets[i])
+                    morph_targets = convert_targets(morph_targets, prim, c4d_mesh)
+                    
             if has_blendshape:
-                c4d_target.SetName("Poses: " + gltf.data.meshes[mesh_index].name if gltf.data.meshes[mesh_index].name is not None else "Mesh")
+                c4d_target.SetName("Poses: " + mesh_name)
                 for i in range(len(morph_targets)):
                     target = morph_targets[i]
                     target = connect_and_delete(target)
@@ -524,8 +606,10 @@ class ImportGLTF(import_gltf.ImportGLTF):
 
             # Connect all the meshes to the object
             c4d_object = connect_and_delete(c4d_object)
+            c4d_object.SetName(mesh_name)
             if has_blendshape:
                 c4d_target.InsertUnder(c4d_object)
+                create_morphtag(c4d_object, c4d_target.GetChildren())  # type: ignore
             return c4d_object
 
     #############################
