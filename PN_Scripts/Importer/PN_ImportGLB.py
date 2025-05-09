@@ -781,32 +781,79 @@ class GLB2GLTF:
             return vrm
         def generate_license_file_from_vrm(gltf_importer: glTFImporter, export_settings: dict) -> None:
             vrm = gltf_importer.data
-            vrm_extensions = vrm.extensions
-            title = vrm_extensions["VRM"]["meta"]["title"]
-            author = vrm_extensions["VRM"]["meta"]["author"]
-            contact_info = vrm_extensions["VRM"]["meta"]["contactInformation"]
-            license_name = vrm_extensions["VRM"]["meta"]["licenseName"]
-            allowed_user = vrm_extensions["VRM"]["meta"]["allowedUserName"]
-            # These keys are not wrong! It's VRM that's wrong! I guess "Usage" will be spelled wrong in VRM forever. Ha ha ha!
-            violent_Usage = vrm_extensions["VRM"]["meta"]["violentUssageName"]
-            sexual_Usage = vrm_extensions["VRM"]["meta"]["sexualUssageName"]
-            commercial_Usage = vrm_extensions["VRM"]["meta"]["commercialUssageName"]
+            vrm_spec_ext = {
+                0: "VRM",
+                1: "VRMC_vrmc",
+            }
+            extention_used:list[str] = vrm.extensions_used
 
-            license_str = (
-                "Model Information:\n" +
-                "* title:   " + title + "\n" +
-                "* author:  " + author + ((" (" + contact_info + ")") if contact_info else "") + "\n\n" +
-                "Model License:\n" +
-                "* license type: " + license_name + "\n\n" +
-                "A person who can perform with this avatar\n- " + allowed_user + "\n" +
-                "Permission to perform violent acts with this avatar\n- " + violent_Usage + "\n" +
-                "Permission to perform sexual acts with this avatar\n- " + sexual_Usage + "\n" +
-                "Permission to use this avatar commercially\n- " + commercial_Usage + "\n\n"
-            )
-            license_filepath = os.path.join(export_settings["gltf_filedirectory"], "license.txt")
-            file = open(license_filepath, "w")
-            file.write(license_str)
-            file.close()
+            if vrm_spec_ext[0] in extention_used:
+                # VRM 0.0
+                vrm_extensions = vrm.extensions
+                title = vrm_extensions["VRM"]["meta"]["title"]
+                author = vrm_extensions["VRM"]["meta"]["author"]
+                contact_info = vrm_extensions["VRM"]["meta"]["contactInformation"]
+                license_name = vrm_extensions["VRM"]["meta"]["licenseName"]
+                allowed_user = vrm_extensions["VRM"]["meta"]["allowedUserName"]
+                # These keys are not wrong! It's VRM that's wrong! I guess "Usage" will be spelled wrong in VRM forever. Ha ha ha!
+                violent_usage = vrm_extensions["VRM"]["meta"]["violentUssageName"]
+                sexual_usage = vrm_extensions["VRM"]["meta"]["sexualUssageName"]
+                commercial_usage = vrm_extensions["VRM"]["meta"]["commercialUssageName"]
+
+                license_str = (
+                    "Model Information:\n" +
+                    "* title:   " + title + "\n" +
+                    "* author:  " + author + ((" (" + contact_info + ")") if contact_info else "") + "\n\n" +
+                    "Model License:\n" +
+                    "* license type: " + license_name + "\n\n" +
+                    "A person who can perform with this avatar\n- " + allowed_user + "\n" +
+                    "Permission to perform violent acts with this avatar\n- " + violent_usage + "\n" +
+                    "Permission to perform sexual acts with this avatar\n- " + sexual_usage + "\n" +
+                    "Permission to use this avatar commercially\n- " + commercial_usage + "\n\n"
+                )
+                license_filepath = os.path.join(export_settings["gltf_filedirectory"], "license.txt")
+                file = open(license_filepath, "w")
+                file.write(license_str)
+                file.close()
+            elif vrm_spec_ext[1] in extention_used:
+                # VRM 1.0
+                vrm_extensions = vrm.extensions
+                spec: str = vrm_extensions["VRMC_vrmc"]["specVersion"]
+                name: str = vrm_extensions["VRMC_vrmc"]["name"]
+                authors: list[str] = vrm_extensions["VRMC_vrmc"]["authors"]
+                contact_information: str = vrm_extensions["VRMC_vrmc"]["contactInformation"]
+                license_url: str = vrm_extensions["VRMC_vrmc"]["licenseUrl"]
+                avatarPermission: str = vrm_extensions["VRMC_vrmc"]["avatarPermission"]
+                violent_usage: bool = vrm_extensions["VRMC_vrmc"]["allowExcessivelyViolentUsage"]
+                sexual_usage: bool = vrm_extensions["VRMC_vrmc"]["allowExcessivelySexualUsage"]
+                commercial_usage: bool = vrm_extensions["VRMC_vrmc"]["commercialUsage"]
+                political_or_religious_usage: bool = vrm_extensions["VRMC_vrmc"]["allowPoliticalOrReligiousUsage"]
+                anti_social_or_hate_uUsage: bool = vrm_extensions["VRMC_vrmc"]["allowAntiSocialOrHateUsage"]
+                credit_notice: str = vrm_extensions["VRMC_vrmc"]["creditNotation"]
+                redistribution: bool = vrm_extensions["VRMC_vrmc"]["allowRedistribution"]
+                modification: bool = vrm_extensions["VRMC_vrmc"]["modification"]
+                license_str = (
+                    "Model Information:\n" +
+                    "* format spec: " + spec + "\n" +
+                    "* name: " + name + "\n" +
+                    "* authors: \n\t" + "\n\t".join(authors) + "\n" +
+                    "* contact information: " + contact_information + "\n" +
+                    "* license url: " + license_url + "\n\n" +
+                    "Model License:\n" +
+                    "* avatar permission: " + avatarPermission + "\n" +
+                    "* allow excessively violent usage: " + ("allow" if violent_usage else "not allow") + "\n" +
+                    "* allow excessively sexual usage: " + ("allow" if sexual_usage else "not allow") + "\n" +
+                    "* allow political or religious usage: " + ("allow" if political_or_religious_usage else "not allow") + "\n" +
+                    "* allow anti-social or hate usage: " + ("allow" if anti_social_or_hate_uUsage else "not allow") + "\n" +
+                    "* allow redistribution: " + ("allow" if redistribution else "not allow") + "\n" +
+                    "* allow modification: " + ("allow" if modification else "not allow") + "\n" +
+                    "* commercial usage: " + ("allow" if commercial_usage else "not allow") + "\n" +
+                    "* credit notation: " + credit_notice + "\n\n"
+                )
+                license_filepath = os.path.join(export_settings["gltf_filedirectory"], "license.txt")
+                file = open(license_filepath, "w")
+                file.write(license_str)
+                file.close()
             return
 
         # prepare export
