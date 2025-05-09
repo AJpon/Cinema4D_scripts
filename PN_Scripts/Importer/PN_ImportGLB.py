@@ -304,6 +304,7 @@ class ImportGLTF(import_gltf.ImportGLTF):
         imported_materials = self.import_gltf_materials(gltf)
         skins              = self.parse_gltf_skins(gltf)
         nodes              = self.create_c4d_nodes(gltf, skins, imported_materials)
+
         self.create_c4d_hierarchy(gltf, nodes, skins)
         self.create_c4d_weights(gltf, nodes, skins)
         self.import_animations(gltf, nodes)
@@ -611,6 +612,31 @@ class ImportGLTF(import_gltf.ImportGLTF):
                 c4d_target.InsertUnder(c4d_object)
                 create_morphtag(c4d_object, c4d_target.GetChildren())  # type: ignore
             return c4d_object
+
+    def create_c4d_hierarchy(self, gltf, nodes, skins):
+
+        # Ignore transforms for skinned meshes
+        mesh_nodes_idx = [n for n in range(len(gltf.data.nodes)) if gltf.data.nodes[n].mesh is not None and gltf.data.nodes[n].skin is not None]
+
+        # Add GlTF root objects to document
+        for node in reversed(gltf.data.scenes[0].nodes):
+            c4d.documents.GetActiveDocument().InsertObject(nodes[node])
+
+        # Do the parenting
+        for n in reversed(nodes):
+            if nodes[n] is not None:
+                # Insert the children under their respective parents
+                if gltf.data.nodes[int(n)].children:
+                    for child in reversed(gltf.data.nodes[int(n)].children):
+                        if nodes[child] is not None:
+                            if child not in mesh_nodes_idx:
+                                c4d.documents.GetActiveDocument().InsertObject(nodes[child], parent=nodes[n])
+                            else:
+                                # If skinned, assign to the root
+                                c4d.documents.GetActiveDocument().InsertObject(nodes[child])
+
+        # Apply changes
+        c4d.documents.GetActiveDocument().SetChanged()
 
     #############################
     # SKINNING AND ANIMATIONS
