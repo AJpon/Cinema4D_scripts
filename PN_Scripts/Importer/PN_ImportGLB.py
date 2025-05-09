@@ -645,9 +645,9 @@ class ImportGLTF(import_gltf.ImportGLTF):
     def create_c4d_weights(self, gltf, nodes, skins):
         initial_transforms = {}
         # create the weights and bind them to joints
-        for i in skins:
+        for i in reversed(skins):
             skin = skins[i]
-            for iNode, iMesh in zip(skin.node_idx, skin.mesh_idx):
+            for iNode, iMesh in zip(reversed(skin.node_idx), reversed(skin.mesh_idx)):
                 c4d_obj   = nodes[iNode]
                 gltf_mesh = gltf.data.meshes[iMesh]
 
@@ -661,7 +661,7 @@ class ImportGLTF(import_gltf.ImportGLTF):
 
                 # Read in the data
                 vert_idx_offset = 0
-                for prim in gltf_mesh.primitives:
+                for prim in reversed(gltf_mesh.primitives):
                     # Accessor data
                     weights = BinaryData.get_data_from_accessor(gltf, prim.attributes["WEIGHTS_0"]) if "WEIGHTS_0" in prim.attributes else []
                     joints  = BinaryData.get_data_from_accessor(gltf, prim.attributes["JOINTS_0"])  if "JOINTS_0"  in prim.attributes else []
