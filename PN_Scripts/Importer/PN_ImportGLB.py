@@ -561,7 +561,7 @@ class ImportGLTF(import_gltf.ImportGLTF):
                 has_blendshape = True
                 morph_targets = convert_targets(morph_targets, prim, c4d_mesh)
             if has_blendshape:
-                c4d_target.SetName("Poses: " + gltf.data.meshes[mesh_index].name if gltf.data.meshes[mesh_index].name is not None else "Mesh")
+                c4d_target.SetName("Poses: " + mesh_name)
                 for i in range(len(morph_targets)):
                     target = morph_targets[i]
                     target.SetEditorMode(c4d.MODE_OFF)
